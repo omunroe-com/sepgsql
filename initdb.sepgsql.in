@@ -1,0 +1,132 @@
+# -------------------------------------------------------------
+#
+# initdb.sepgsql
+#
+# SE-PostgreSQL initializer script
+# 
+# Author: KaiGai Kohei <kaigai@ak.jp.nec.com>
+#
+# Copyright (c) 2007 - 2010, NEC Corporation
+# Copyright (c) 2006 - 2007, KaiGai Kohei <kaigai@kaigai.gr.jp>
+#
+# -------------------------------------------------------------
+
+SEPG_BIN=@@__SEPG_BIN__@@
+SEPG_VERSION=@@__SEPG_VERSION__@@
+SEPG_DATA=$PGDATA
+SEPG_SPEC=NULL
+
+#
+# Declaration of functions
+#
+function usage()
+{
+    echo "usage: `basename $0` [options]"
+    echo
+    echo "[options]"
+    echo "  -D <dir>    location for the database cluster"
+    echo "  -s <spec>   path to the specfile of database labels"
+    echo "  -v          print version"
+    echo "  -h          print this message"
+
+    exit 1
+}
+
+#
+# Parse options
+#
+
+while getopts "D:s:vh" code; do
+    case $code in
+	D)
+	    SEPG_DATA=$OPTARG
+	    ;;
+	s)
+	    SEPG_SPEC="'$OPTARG'"
+	    ;;
+	v)
+	    echo "`basename $0` - SE-PostgreSQL initializer ($SEPG_VERSION)"
+	    exit 1
+	    ;;
+	\?)
+	    usage $0
+	    ;;
+	h)
+	    usage $0
+	    ;;
+    esac
+done
+
+if [ $OPTIND -le $# ]; then
+    usage $0
+fi
+
+#
+# Check environment
+#
+POSTGRES=`env PATH=$SEPG_BIN:$PATH which postgres`
+if [ ! -x "$POSTGRES" ]; then
+    echo "no executable postgres binary found"
+    exit 1
+fi
+
+if [ ! -r "$SEPG_DATA/PG_VERSION" -o ! -r "$SEPG_DATA/postgresql.conf" ]; then
+    echo "'$SEPG_DATA' may not be initialized."
+    echo "Run initdb -D '$SEPG_DATA' first"
+    exit 1
+fi
+
+if [ x"$SEPG_VERSION" != x"`cat $SEPG_DATA/PG_VERSION`" ]; then
+    echo "'$SEPG_DATA' may not be initialized for the version $SEPG_VERSION"
+    exit 1
+fi
+
+if [ -e "$SEPG_DATA/SEPGSQL" ]; then
+    echo "'$SEPG_DATA' might be already initialized"
+    exit 1
+fi
+
+#
+# Set initial security context
+#
+POSTGRES_OPTS="--single -F -O -c search_path=pg_catalog -c exit_on_error=true"
+
+WITH_SHARED="true"
+DBLIST="template1 template0 postgres"
+for DBNAME in $DBLIST
+do
+$POSTGRES $POSTGRES_OPTS $DBNAME > /dev/null <<EOF
+LOAD 'sepgsql';
+CREATE OR REPLACE FUNCTION sepgsql_getcon() RETURNS text LANGUAGE 'c' AS 'sepgsql','sepgsql_getcon';
+CREATE OR REPLACE FUNCTION sepgsql_mcstrans_in(text) RETURNS text LANGUAGE 'c' AS 'sepgsql','sepgsql_mcstrans_in';
+CREATE OR REPLACE FUNCTION sepgsql_mcstrans_out(text) RETURNS text LANGUAGE 'c' AS 'sepgsql','sepgsql_mcstrans_out';
+CREATE OR REPLACE FUNCTION sepgsql_restorecon(bool,text) RETURNS bool LANGUAGE 'c' AS 'sepgsql','sepgsql_restorecon';
+SELECT sepgsql_restorecon($WITH_SHARED, $SEPG_SPEC);
+EOF
+    if [ $? -ne 0 ]; then
+        echo "failed to initialize database: $DBNAME";
+	exit 1
+    fi
+    WITH_SHARED="false"
+done
+
+#
+# Edit postgresql.conf
+#
+TEMP=`mktemp` || exit 1
+
+cp "$SEPG_DATA/postgresql.conf" $TEMP
+cat $TEMP | awk "/^#shared_preload_libraries/ {
+    print \"shared_preload_libraries = 'sepgsql'	# (change requires restart)\";
+    next;
+}
+{
+    print;
+    next;
+}" > "$SEPG_DATA/postgresql.conf"
+rm -f $TEMP
+
+#
+# Put a marker file
+#
+ln -sf PG_VERSION $PGDATA/SEPGSQL
