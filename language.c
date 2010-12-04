@@ -1,8 +1,7 @@
 /*
  * language.c
  *
- * It provides access controls on procedural language objects.
- * (pg_language)
+ * It provides access controls on procedural language objects
  *
  * Author: KaiGai Kohei <kaigai@ak.jp.nec.com>
  *
@@ -11,55 +10,31 @@
  */
 #include "postgres.h"
 
-#include "catalog/indexing.h"
 #include "catalog/pg_language.h"
+#include "commands/seclabel.h"
 
 #include "sepgsql.h"
 
-
-static HeapTuple
-lookup_language_tuple(Oid langOid)
-{
-}
-
 /*
  * sepgsql_language_post_create
- * 
- * The post-creation hook of procedural language object.
+ *
+ * The post-creation hook of schema object
  */
 void
-sepgsql_language_post_create(Oid langOid)
+sepgsql_language_post_create(Oid languageId)
 {
-	Form_pg_language	formLang;
-	Relation	rel;
-	ScanKeyData	skey[1];
-	SysScanDesc	scan;
-	HeapTuple	tuple;
+	/* FIXME: Right now we assume database has fixed label */
+	char		   *tcontext = "system_u:object_r:sepgsql_db_t:s0";
+	char		   *ncontext;
+	ObjectAddress	object = {
+		.classId = LanguageRelationId,
+		.objectId = languageId,
+		.objectSubId = 0,
+	};
 
-	rel = heap_open(LanguageRelationId, AccessShareLock);
+	ncontext = sepgsql_compute_create(sepgsql_get_client_label(),
+									  tcontext,
+									  SEPG_CLASS_DB_LANGUAGE);
 
-	ScanKeyInit(&skey[0],
-				ObjectIdAttributeNumber,
-				BTEqualStrategyNumber, F_OIDEQ,
-				ObjectIdGetDatum(langOid));
-
-	scan = systable_beginscan(rel, LanguageOidIndexId,
-							  SnapshotSelf, 1, skey);
-	tuple = systable_getnext(scan);
-	if (!HeapTupleIsValid(tuple))
-		elog(ERROR, "Heap lookup failed for language %u", langOid);
-
-	formLang = (Form_pg_language) GETSTRUCT(tuple);
-
-
-
-
-
-
-
-
-
-	systable_endscan(scan);
-
-	heap_close(rel, AccessShareLock);
+	SetSecurityLabel(&object, SEPGSQL_LABEL_TAG, ncontext);
 }

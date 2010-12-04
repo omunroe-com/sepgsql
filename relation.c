@@ -8,100 +8,132 @@
  * Copyright (c) 2007 - 2010, NEC Corporation
  * Copyright (c) 2006 - 2007, KaiGai Kohei <kaigai@kaigai.gr.jp>
  */
+#include "postgres.h"
 
-sepgsql_relation_post_create(objectId, subId);
+#include "access/genam.h"
+#include "access/heapam.h"
+#include "access/sysattr.h"
+#include "catalog/indexing.h"
+#include "catalog/pg_attribute.h"
+#include "catalog/pg_class.h"
+#include "catalog/pg_namespace.h"
+#include "commands/seclabel.h"
+#include "utils/fmgroids.h"
+#include "utils/lsyscache.h"
+#include "utils/tqual.h"
 
+#include "sepgsql.h"
 
-
-
-
-
-/*****/
-static List *
-sepgsql_relation_create(const char *relName,
-						Oid namespaceId,
-						Oid tablespaceId,
-						char relkind,
-						TupleDesc tupdesc,
-						bool createAs)
+/*
+ * sepgsql_attribute_post_create
+ *
+ * The post creation hook of attribute
+ */
+void
+sepgsql_attribute_post_create(Oid relOid, int subId)
 {
-	SecLabelItem   *sl;
-	char		   *tcontext = "system_u:object_r:sepgsql_table_t:s0";
+	ObjectAddress	object;
+	char		   *ncontext;
+
+	if (get_rel_relkind(relOid) != RELKIND_RELATION)
+		return;
+
+	object.classId = RelationRelationId;
+	object.objectId = relOid;
+	object.objectSubId = 0;
+	ncontext = sepgsql_client_compute_create(&object,
+											 SEPG_CLASS_DB_COLUMN);
+
+	object.objectSubId = subId;
+	SetSecurityLabel(&object, SEPGSQL_LABEL_TAG, ncontext);
+}
+
+/*
+ * sepgsql_relation_post_create
+ *
+ * The post creation hook of relation/attribute
+ */
+void
+sepgsql_relation_post_create(Oid relOid)
+{
+	Relation		rel;
+	ScanKeyData		skey;
+	SysScanDesc		sscan;
+	HeapTuple		tuple;
+	Form_pg_class	classForm;
+	Oid				namespaceId;
+	AttrNumber		natts;
+	AttrNumber		attnum;
+	char			relkind;
+	bool			relhasoids;
+	ObjectAddress	object;
 	uint16			tclass;
-	uint32			required;
-	char			auname[NAMEDATALEN * 2 + 10];
-	int				index;
-	List		   *seclabels = NIL;
+	char		   *tcontext;
+	char		   *acontext;
+
+	rel = heap_open(RelationRelationId, AccessShareLock);
+
+	ScanKeyInit(&skey,
+				ObjectIdAttributeNumber,
+				BTEqualStrategyNumber, F_OIDEQ,
+				ObjectIdGetDatum(relOid));
+
+	sscan = systable_beginscan(rel, ClassOidIndexId, true,
+							   SnapshotSelf, 1, &skey);
+
+	tuple = systable_getnext(sscan);
+	if (!HeapTupleIsValid(tuple))
+		elog(ERROR, "catalog lookup failed for relation %u", relOid);
+
+	classForm = (Form_pg_class) GETSTRUCT(tuple);
+
+	namespaceId = classForm->relnamespace;
+	natts = classForm->relnatts;
+	relkind = classForm->relkind;
+	relhasoids = classForm->relhasoids;
+
+	systable_endscan(sscan);
+	heap_close(rel, AccessShareLock);
 
 	if (relkind == RELKIND_RELATION)
 		tclass = SEPG_CLASS_DB_TABLE;
 	else if (relkind == RELKIND_SEQUENCE)
 		tclass = SEPG_CLASS_DB_SEQUENCE;
 	else if (relkind == RELKIND_VIEW)
-		tclass = SEPG_CLASS_DB_TUPLE;
+		tclass = SEPG_CLASS_DB_VIEW;
 	else
-		return NIL;
+		return;		/* no label assignment */
 
-	required = SEPG_DB_TABLE__CREATE;
-	if (createAs)
-		required |= SEPG_DB_TABLE__INSERT;
+	object.classId = NamespaceRelationId;
+	object.objectId = namespaceId;
+	object.objectSubId = 0;
+	tcontext = sepgsql_client_compute_create(&object, tclass);
 
-	/* permission on the relation */
-	sepgsql_compute_perms(sepgsql_get_client_label(),
-						  tcontext,
-						  tclass,
-						  required,
-						  relName,
-						  true);
-
-	sl = palloc0(sizeof(SecLabelItem));
-	sl->object.classId = RelationRelationId;
-	sl->object.objectId = InvalidOid;	/* to be assigned later */
-	sl->object.objectSubId = 0;
-	sl->tag = SEPGSQL_LABEL_TAG;
-	sl->seclabel = tcontext;
-
-	seclabels = list_make1(sl);
+	object.classId = RelationRelationId;
+	object.objectId = relOid;
+	object.objectSubId = 0;
+	SetSecurityLabel(&object, SEPGSQL_LABEL_TAG, tcontext);
 
 	if (relkind != RELKIND_RELATION)
-		return seclabels;
+		return;		/* no label assignment on attributes */
 
-	/* permission on the columns */
-	for (index = FirstLowInvalidHeapAttributeNumber + 1;
-		 index < tupdesc->natts;
-		 index++)
+	for (attnum = FirstLowInvalidHeapAttributeNumber + 1;
+		 attnum <= natts;
+		 attnum++)
 	{
-		Form_pg_attribute	attr;
-
-		if (index == ObjectIdAttributeNumber && !tupdesc->tdhasoid)
+		if (attnum == InvalidAttrNumber)
 			continue;
 
-		if (index < 0)
-			attr = SystemAttributeDefinition(index, tupdesc->tdhasoid);
-		else
-			attr = tupdesc->attrs[index];
+		if (attnum == ObjectIdAttributeNumber && !relhasoids)
+			continue;
 
-		required = SEPG_DB_COLUMN__CREATE;
-		if (createAs && index >= 0)
-			required |= SEPG_DB_COLUMN__INSERT;
+		object.classId = RelationRelationId;
+		object.objectId = relOid;
+		object.objectSubId = 0;
+		acontext = sepgsql_client_compute_create(&object,
+												 SEPG_CLASS_DB_COLUMN);
 
-		snprintf(auname, sizeof(auname), "%s.%s", relName, NameStr(attr->attname));
-
-		sepgsql_compute_perms(sepgsql_get_client_label(),
-							  tcontext,
-							  tclass,
-							  required,
-							  auname,
-							  true);
-
-		sl = palloc0(sizeof(SecLabelItem));
-		sl->object.classId = RelationRelationId;
-		sl->object.objectId = InvalidOid;		/* to be assigned later */
-		sl->object.objectSubId = attr->attnum;
-		sl->tag = SEPGSQL_LABEL_TAG;
-		sl->seclabel = tcontext;
-		seclabels = lappend(seclabels, sl);
+		object.objectSubId = attnum;
+		SetSecurityLabel(&object, SEPGSQL_LABEL_TAG, acontext);
 	}
-	return seclabels;
 }
-

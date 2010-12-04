@@ -16,6 +16,7 @@
 #include "catalog/pg_largeobject.h"
 #include "catalog/pg_namespace.h"
 #include "catalog/pg_proc.h"
+#include "commands/seclabel.h"
 #include "executor/executor.h"
 #include "fmgr.h"
 #include "libpq/auth.h"
@@ -28,8 +29,8 @@
 static object_access_hook_type			object_access_next = NULL;
 static ClientAuthentication_hook_type	ClientAuthentication_next = NULL;
 static ExecutorCheckPerms_hook_type		ExecutorCheckPerms_next = NULL;
-static needs_function_call_type			needs_function_call_next = NULL;
-static function_call_type				function_call_next = NULL;
+//static needs_function_call_type			needs_function_call_next = NULL;
+//static function_call_type				function_call_next = NULL;
 
 /*
  * sepgsql_client_authorization
@@ -41,8 +42,8 @@ static function_call_type				function_call_next = NULL;
 static void
 sepgsql_client_authorization(Port *port, int status)
 {
-	if (client_authentication_next)
-		(*client_authentication_next)(port, status);
+	if (ClientAuthentication_next)
+		(*ClientAuthentication_next)(port, status);
 
 	/*
 	 * In the case when authentication failed, the supplied connection
@@ -91,7 +92,10 @@ sepgsql_object_access(ObjectAccessType access,
 					break;
 
 				case RelationRelationId:
-					sepgsql_relation_post_create(objectId, subId);
+					if (subId == 0)
+						sepgsql_relation_post_create(objectId);
+					else
+						sepgsql_attribute_post_create(objectId, subId);
 					break;
 
 				case ProcedureRelationId:
@@ -125,17 +129,17 @@ sepgsql_object_access(ObjectAccessType access,
 static bool
 sepgsql_exec_check_perms(List *rangeTabls, bool abort)
 {
-	bool	result_next = true;
-
-	if (ExecutorCheckPerms_next)
-		result = (*ExecutorCheckPerms_next)(rangeTabls, abort);
+	if (ExecutorCheckPerms_next &&
+		!(*ExecutorCheckPerms_next)(rangeTabls, abort))
+		return false;
 
 	if (!sepgsql_dml_privileges(rangeTabls, abort))
 		return false;
 
-	return result;
+	return true;
 }
 
+#if 0
 static bool
 sepgsql_needs_function_call(Oid functionId)
 {
@@ -193,13 +197,14 @@ sepgsql_function_call(FunctionCallEventType event,
 			break;
 	}
 }
+#endif
 
 void
 sepgsql_register_hooks(void)
 {
 	/* security label provider hook */
-	register_object_relabel_hook(SEPGSQL_LABEL_TAG,
-								 sepgsql_object_relabel);
+	register_label_provider(SEPGSQL_LABEL_TAG,
+							sepgsql_object_relabel);
 
 	/* client authentication hook */
 	ClientAuthentication_next = ClientAuthentication_hook;

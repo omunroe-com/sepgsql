@@ -226,7 +226,7 @@ sepgsql_object_relabel(const ObjectAddress *object, const char *seclabel)
 	if (seclabel &&
 		security_check_context_raw((security_context_t) seclabel) < 0)
 		ereport(ERROR,
-				(errcode(ERRCODE_INVALID_SECLABEL),
+				(errcode(ERRCODE_INVALID_NAME),
 				 errmsg("invalid security label: \"%s\"", seclabel)));
 	/*
 	 * Do actual permission checks for each object classes

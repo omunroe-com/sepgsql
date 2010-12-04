@@ -25,6 +25,7 @@
 #define SEPGSQL_MODE_DEFAULT		1
 #define SEPGSQL_MODE_PERMISSIVE		2
 #define SEPGSQL_MODE_INTERNAL		3
+#define SEPGSQL_MODE_DISABLED		4
 
 /*
  * Internally used code of object classes
@@ -46,7 +47,8 @@
 #define SEPG_CLASS_DB_TUPLE			14
 #define SEPG_CLASS_DB_BLOB			15
 #define SEPG_CLASS_DB_LANGUAGE		16
-#define SEPG_CLASS_MAX				17
+#define SEPG_CLASS_DB_VIEW			17
+#define SEPG_CLASS_MAX				18
 
 /*
  * Internally used code of access vectors
@@ -194,15 +196,20 @@
 #define SEPG_DB_LANGUAGE__SETATTR			(SEPG_DB_DATABASE__SETATTR)
 #define SEPG_DB_LANGUAGE__RELABELFROM		(SEPG_DB_DATABASE__RELABELFROM)
 #define SEPG_DB_LANGUAGE__RELABELTO			(SEPG_DB_DATABASE__RELABELTO)
-#define SEPG_DB_LANGUAGE__IMPLEMENTE		(1<<6)
+#define SEPG_DB_LANGUAGE__IMPLEMENT			(1<<6)
 #define SEPG_DB_LANGUAGE__EXECUTE			(1<<7)
+
+#define SEPG_DB_VIEW__CREATE				(SEPG_DB_DATABASE__CREATE)
+#define SEPG_DB_VIEW__DROP					(SEPG_DB_DATABASE__DROP)
+#define SEPG_DB_VIEW__GETATTR				(SEPG_DB_DATABASE__GETATTR)
+#define SEPG_DB_VIEW__SETATTR				(SEPG_DB_DATABASE__SETATTR)
+#define SEPG_DB_VIEW__RELABELFROM			(SEPG_DB_DATABASE__RELABELFROM)
+#define SEPG_DB_VIEW__RELABELTO				(SEPG_DB_DATABASE__RELABELTO)
+#define SEPG_DB_VIEW__EXPAND				(1<<7)
 
 /*
  * selinux.c
  */
-extern int  sepgsql_mode;
-extern bool sepgsql_debug_audit;
-
 extern bool sepgsql_is_enabled(void);
 
 extern int  sepgsql_get_mode(void);
@@ -266,29 +273,39 @@ extern Datum sepgsql_mcstrans_out(PG_FUNCTION_ARGS);
 extern Datum sepgsql_restorecon(PG_FUNCTION_ARGS);
 
 /*
+ * dml.c
+ */
+extern bool sepgsql_dml_privileges(List *rangeTabls, bool abort);
+
+/*
+ * hooks.c
+ */
+extern void sepgsql_register_hooks(void);
+
+/*
  * language.c
  */
-extern void	sepgsql_language_post_create(Oid objectId);
+extern void	sepgsql_language_post_create(Oid langId);
 
 /*
  * largeobject.c
  */
-extern void sepgsql_largeobject_post_create(Oid objectId);
+extern void sepgsql_largeobject_post_create(Oid blobId);
 
 /*
  * proc.c
  */
-extern void	sepgsql_proc_post_create(Oid objectId);
+extern void	sepgsql_proc_post_create(Oid procId);
 
 /*
  * relation.c
  */
-extern bool	sepgsql_relation_privileges(List *rangeTabls, bool abort);
-extern void	sepgsql_relation_post_create(Oid objectId, int subId);
+extern void sepgsql_attribute_post_create(Oid relOid, int subId);
+extern void sepgsql_relation_post_create(Oid relOid);
 
 /*
  * schema.c
  */
-extern void	sepgsql_schema_post_create(Oid objectId);
+extern void	sepgsql_schema_post_create(Oid namespaceId);
 
 #endif /* SEPGSQL_H */

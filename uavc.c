@@ -213,7 +213,7 @@ sepgsql_client_has_perms(ObjectAddress	   *tobject,
 			cache = sepgsql_avc_make_entry(client_avc_page, tobject, tclass);
 
 		denied	= required & ~cache->allowed;
-		if (sepgsql_debug_audit)
+		if (sepgsql_get_debug_audit())
 			audited = (denied ? (denied & ~0) : (required & ~0));
 		else
 			audited	= denied ? (denied & cache->auditdeny)
@@ -227,7 +227,7 @@ sepgsql_client_has_perms(ObjectAddress	   *tobject,
 		}
 	} while (!sepgsql_avc_check_valid());
 
-	if (audited && sepgsql_mode != SEPGSQL_MODE_INTERNAL)
+	if (audited && sepgsql_get_mode() != SEPGSQL_MODE_INTERNAL)
 	{
 		scontext = client_avc_page->scontext;
 		tcontext = GetSecurityLabel(tobject, SEPGSQL_LABEL_TAG);

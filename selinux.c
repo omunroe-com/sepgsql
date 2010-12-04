@@ -35,7 +35,7 @@ static int	sepgsql_mode = SEPGSQL_MODE_INTERNAL;
 /*
  * GUC: sepgsql.permissive = (on|off)
  */
-static bool	sepgsql_permissve;
+static bool	sepgsql_permissive;
 
 /*
  * GUC: sepgsql.debug_audit = (on|off)
@@ -290,8 +290,21 @@ static struct
 			{ "setattr",		SEPG_DB_LANGUAGE__SETATTR },
 			{ "relabelfrom",	SEPG_DB_LANGUAGE__RELABELFROM },
 			{ "relabelto",		SEPG_DB_LANGUAGE__RELABELTO },
-			{ "implement",		SEPG_DB_LANGUAGE__IMPLEMENTE },
+			{ "implement",		SEPG_DB_LANGUAGE__IMPLEMENT },
 			{ "execute",		SEPG_DB_LANGUAGE__EXECUTE },
+			{ NULL, 0UL },
+		}
+	},
+	{
+		"db_view",				SEPG_CLASS_DB_VIEW,
+		{
+			{ "create",			SEPG_DB_VIEW__CREATE },
+			{ "drop",			SEPG_DB_VIEW__DROP },
+			{ "getattr",		SEPG_DB_VIEW__GETATTR },
+			{ "setattr",		SEPG_DB_VIEW__SETATTR },
+			{ "relabelfrom",	SEPG_DB_VIEW__RELABELFROM },
+			{ "relabelto",		SEPG_DB_VIEW__RELABELTO },
+			{ "expand",			SEPG_DB_VIEW__EXPAND },
 			{ NULL, 0UL },
 		}
 	},
@@ -660,7 +673,10 @@ _PG_init(void)
 	 * initialization.
 	 */
 	if (is_selinux_enabled() < 1)
+	{
+		sepgsql_mode = SEPGSQL_MODE_DISABLED;
 		return;
+	}
 
 	/*
 	 * sepgsql.permissive = (on|off)
@@ -671,7 +687,7 @@ _PG_init(void)
 	DefineCustomBoolVariable("sepgsql.permissive",
 							 "Turn on/off permissive mode in SE-PostgreSQL",
 							 NULL,
-							 &sepgsql_permissve,
+							 &sepgsql_permissive,
 							 false,
 							 PGC_POSTMASTER,
 							 GUC_NOT_IN_SAMPLE,
