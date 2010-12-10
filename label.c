@@ -15,6 +15,10 @@
 #include "catalog/catalog.h"
 #include "catalog/dependency.h"
 #include "catalog/indexing.h"
+#include "catalog/pg_attribute.h"
+#include "catalog/pg_class.h"
+#include "catalog/pg_namespace.h"
+#include "catalog/pg_proc.h"
 #include "commands/dbcommands.h"
 #include "commands/seclabel.h"
 #include "libpq/libpq-be.h"
@@ -233,8 +237,14 @@ sepgsql_object_relabel(const ObjectAddress *object, const char *seclabel)
 	 */
 	switch (object->classId)
 	{
+		case NamespaceRelationId:
+			// sepgsql_schema_relabel(object, seclabel);
+			break;
 		case RelationRelationId:
 			sepgsql_relation_relabel(object, seclabel);
+			break;
+		case ProcedureRelationId:
+			// sepgsql_proc_relabel(object, seclabel);
 			break;
 
 		default:
@@ -342,6 +352,74 @@ sepgsql_mcstrans_out(PG_FUNCTION_ARGS)
 	freecon(qual_label);
 
 	PG_RETURN_POINTER(cstring_to_text(result));
+}
+
+/*
+ * exec_schema_restorecon
+ *
+ * A helper function of sepgsql_restorecon
+ */
+static void
+exec_schema_restorecon(struct selabel_handle *sehnd)
+{
+	Relation		rel;
+	SysScanDesc		sscan;
+	HeapTuple		tuple;
+	ObjectAddress	object;
+	char		   *database_name = get_database_name(MyDatabaseId);
+	char			schema_name[NAMEDATALEN * 2 + 10];
+
+	rel = heap_open(NamespaceRelationId, AccessShareLock);
+
+	sscan = systable_beginscan(rel, InvalidOid, false,
+							   SnapshotNow, 0, NULL);
+	while (HeapTupleIsValid(tuple = systable_getnext(sscan)))
+	{
+		Form_pg_namespace	nspForm = (Form_pg_namespace)GETSTRUCT(tuple);
+		security_context_t	context;
+
+		/* No security labels on toast temp schema */
+		if (strncmp(NameStr(nspForm->nspname), "pg_toast_temp_", 14) == 0)
+			continue;
+
+		snprintf(schema_name, sizeof(schema_name), "%s.%s",
+				 database_name, NameStr(nspForm->nspname));
+
+		if (selabel_lookup_raw(sehnd, &context, schema_name,
+							   SELABEL_DB_SCHEMA) == 0)
+		{
+			PG_TRY();
+			{
+				object.classId = NamespaceRelationId;
+				object.objectId = HeapTupleGetOid(tuple);
+				object.objectSubId = 0;
+
+				/*
+				 * check permission to relabel the relation
+				 */
+				sepgsql_object_relabel(&object, context);
+				SetSecurityLabel(&object, SEPGSQL_LABEL_TAG, context);
+			}
+			PG_CATCH();
+			{
+				freecon(context);
+				PG_RE_THROW();
+			}
+			PG_END_TRY();
+			freecon(context);
+		}
+		else if (errno == ENOENT)
+			ereport(WARNING,
+					(errmsg("no valid initial label for %s, skipped",
+							schema_name)));
+		else
+			ereport(ERROR,
+					(errcode(ERRCODE_INTERNAL_ERROR),
+					 errmsg("libselinux internal error")));
+	}
+	systable_endscan(sscan);
+
+	heap_close(rel, AccessShareLock);
 }
 
 /*
@@ -495,6 +573,73 @@ exec_relation_restorecon(struct selabel_handle *sehnd)
 }
 
 /*
+ * exec_proc_restorecon
+ *
+ * A helper function of sepgsql_restorecon
+ */
+static void
+exec_proc_restorecon(struct selabel_handle *sehnd)
+{
+	Relation		rel;
+	SysScanDesc		sscan;
+	HeapTuple		tuple;
+	ObjectAddress	object;
+	char		   *database_name = get_database_name(MyDatabaseId);
+	char		   *schema_name;
+	char			proc_name[NAMEDATALEN * 3 + 10];
+
+	rel = heap_open(ProcedureRelationId, AccessShareLock);
+
+	sscan = systable_beginscan(rel, InvalidOid, false,
+							   SnapshotNow, 0, NULL);
+	while (HeapTupleIsValid(tuple = systable_getnext(sscan)))
+	{
+		Form_pg_proc		proForm = (Form_pg_proc)GETSTRUCT(tuple);
+		security_context_t	context;
+
+		schema_name = get_namespace_name(proForm->pronamespace);
+		snprintf(proc_name, sizeof(proc_name), "%s.%s.%s",
+				 database_name, schema_name, NameStr(proForm->proname));
+		pfree(schema_name);
+
+		if (selabel_lookup_raw(sehnd, &context, proc_name,
+							   SELABEL_DB_PROCEDURE) == 0)
+		{
+			PG_TRY();
+			{
+				object.classId = ProcedureRelationId;
+				object.objectId = HeapTupleGetOid(tuple);
+				object.objectSubId = 0;
+
+				/*
+				 * check permission to relabel the relation
+				 */
+				sepgsql_object_relabel(&object, context);
+				SetSecurityLabel(&object, SEPGSQL_LABEL_TAG, context);
+			}
+			PG_CATCH();
+			{
+				freecon(context);
+				PG_RE_THROW();
+			}
+			PG_END_TRY();
+			freecon(context);
+		}
+		else if (errno == ENOENT)
+			ereport(WARNING,
+					(errmsg("no valid initial label for %s, skipped",
+							schema_name)));
+		else
+			ereport(ERROR,
+					(errcode(ERRCODE_INTERNAL_ERROR),
+					 errmsg("libselinux internal error")));
+	}
+	systable_endscan(sscan);
+
+	heap_close(rel, AccessShareLock);
+}
+
+/*
  * BOOL sepgsql_restorecon(BOOL with_shared, TEXT specfile)
  *
  * This function tries to assign initial security labels on all the object
@@ -548,7 +693,9 @@ sepgsql_restorecon(PG_FUNCTION_ARGS)
 		if (with_shared)
 			/* do nothing right now */ ;
 
+		exec_schema_restorecon(sehnd);
 		exec_relation_restorecon(sehnd);
+		exec_proc_restorecon(sehnd);
 	}
 	PG_CATCH();
 	{

@@ -117,6 +117,12 @@ sepgsql_relation_post_create(Oid relOid)
 	if (relkind != RELKIND_RELATION)
 		return;		/* no label assignment on attributes */
 
+	/*
+	 * NOTE: the parent relation is not visible yet
+	 */
+	acontext = sepgsql_compute_create(sepgsql_get_client_label(),
+									  tcontext,
+									  SEPG_CLASS_DB_COLUMN);
 	for (attnum = FirstLowInvalidHeapAttributeNumber + 1;
 		 attnum <= natts;
 		 attnum++)
@@ -129,10 +135,6 @@ sepgsql_relation_post_create(Oid relOid)
 
 		object.classId = RelationRelationId;
 		object.objectId = relOid;
-		object.objectSubId = 0;
-		acontext = sepgsql_client_compute_create(&object,
-												 SEPG_CLASS_DB_COLUMN);
-
 		object.objectSubId = attnum;
 		SetSecurityLabel(&object, SEPGSQL_LABEL_TAG, acontext);
 	}
