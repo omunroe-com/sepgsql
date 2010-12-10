@@ -689,7 +689,7 @@ _PG_init(void)
 							 NULL,
 							 &sepgsql_permissive,
 							 false,
-							 PGC_POSTMASTER,
+							 PGC_SIGHUP, //PGC_POSTMASTER,
 							 GUC_NOT_IN_SAMPLE,
 							 NULL,
 							 NULL);

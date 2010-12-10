@@ -12,6 +12,7 @@
 #include "access/hash.h"
 #include "commands/seclabel.h"
 #include "utils/memutils.h"
+
 #include "sepgsql.h"
 
 #include <sched.h>
@@ -130,8 +131,9 @@ sepgsql_avc_make_entry(avc_page		   *page,
 	index = hash % AVC_HASH_NUM_SLOTS;
 
 	scontext = page->scontext;
-	tcontext = GetSecurityLabel(tobject, SEPGSQL_LABEL_TAG);
-
+	tcontext = sepgsql_get_label(tobject->classId,
+								 tobject->objectId,
+								 tobject->objectSubId);
 	sepgsql_compute_avd(scontext, tcontext, tclass, &avd);
 
 	ncontext = sepgsql_compute_create(scontext, tcontext, tclass);
